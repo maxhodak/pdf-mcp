@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../pdf-mcp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz pdf-mcp
+          cd ../../..
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-mcp-${{ matrix.target }}
+          path: pdf-mcp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: pdf-mcp-*.tar.gz
+
+  update-formula:
+    needs: release
+    runs-on: ubuntu-latest
+    concurrency:
+      group: update-formula
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update Homebrew formula
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          URL="https://github.com/maxhodak/pdf-mcp/archive/refs/tags/${VERSION}.tar.gz"
+          SHA256=$(curl -fsSL "$URL" | sha256sum | awk '{print $1}')
+          sed -i "s|url \".*\"|url \"${URL}\"|" Formula/pdf-mcp.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/pdf-mcp.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/pdf-mcp.rb
+          git diff --cached --quiet || git commit -m "Update Homebrew formula for ${GITHUB_REF_NAME}"
+          git push
