@@ -22,6 +22,8 @@ jobs:
             os: macos-15
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     runs-on: ${{ matrix.os }}
 
@@ -32,6 +34,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
+      - name: Set libclang path (Windows)
+        if: runner.os == 'Windows'
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -39,16 +45,24 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (unix)
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../pdf-mcp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz pdf-mcp
           cd ../../..
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/pdf-mcp.exe -DestinationPath pdf-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip
+
       - uses: actions/upload-artifact@v6
         with:
           name: pdf-mcp-${{ matrix.target }}
-          path: pdf-mcp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          path: |
+            pdf-mcp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            pdf-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip
+          if-no-files-found: ignore
 
   release:
     needs: build
@@ -63,7 +77,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: pdf-mcp-*.tar.gz
+          files: |
+            pdf-mcp-*.tar.gz
+            pdf-mcp-*.zip
 
   update-formula:
     needs: release
